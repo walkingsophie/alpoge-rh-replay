@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: rohanarun/alpoge-rh-replay
-          ref: fae0224234ab2d496f9e9d174f2c90207abca491
+          ref: c027175ae7bb1e623de920ed2ffbb718bca626b2
           path: repo
       - name: Install system packages
         run: |
@@ -95,5 +95,5 @@ jobs:
           gh release create "$TAG" "${FILES[@]}" \
             --repo "${{ github.repository }}" \
             --title "Replay batch ${{ inputs.targets }} (run ${{ github.run_id }})" \
-            --notes "Volunteer build evidence from pinned tracker commit fae0224234ab2d496f9e9d174f2c90207abca491."
+            --notes "Volunteer build evidence from pinned tracker commit c027175ae7bb1e623de920ed2ffbb718bca626b2."
           echo "Release: https://github.com/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
