@@ -1,0 +1,97 @@
+name: volunteer-replay-batch
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: Comma-separated tracker module IDs
+        required: true
+permissions:
+  contents: write
+jobs:
+  replay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout pinned tracker source
+        uses: actions/checkout@v4
+        with:
+          repository: rohanarun/alpoge-rh-replay
+          ref: 4a8c4c8851b40294e9c21c28ace2771c569094b1
+          path: repo
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl git python3 build-essential ca-certificates time
+          df -h
+          free -h
+          nproc
+      - name: Install elan
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan-init.sh
+          sh /tmp/elan-init.sh -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Prepare pinned volume
+        run: |
+          cd repo
+          ./verify.sh "$RUNNER_TEMP/vol" --prepare-only
+          rm -rf "$RUNNER_TEMP/vol/parts"
+          df -h
+      - name: Build granted targets
+        run: |
+          cd repo
+          IFS=',' read -ra IDS <<< "${{ inputs.targets }}"
+          rm -f "$RUNNER_TEMP/results.txt"
+          for raw in "${IDS[@]}"; do
+            id="$(echo "$raw" | tr -d '[:space:]')"
+            [ -z "$id" ] && continue
+            echo "=== $id ==="
+            if python3 tracker/tasks.py build "$id" "$RUNNER_TEMP/vol/lean" "$RUNNER_TEMP/receipt-$id" --fast-bundle; then
+              echo "$id BUILD_OK" >> "$RUNNER_TEMP/results.txt"
+            else
+              echo "$id BUILD_FAILED" >> "$RUNNER_TEMP/results.txt"
+            fi
+          done
+          cat "$RUNNER_TEMP/results.txt"
+      - name: Verify successful receipts
+        run: |
+          cd repo
+          mkdir -p "$RUNNER_TEMP/evidence"
+          cp "$RUNNER_TEMP/results.txt" "$RUNNER_TEMP/evidence/results.txt"
+          IFS=',' read -ra IDS <<< "${{ inputs.targets }}"
+          for raw in "${IDS[@]}"; do
+            id="$(echo "$raw" | tr -d '[:space:]')"
+            [ -z "$id" ] && continue
+            d="$RUNNER_TEMP/receipt-$id"
+            [ -d "$d" ] || continue
+            if python3 tracker/replay_evidence.py verify "$id" "$d" --checkout "$RUNNER_TEMP/vol/lean" \
+                 > "$RUNNER_TEMP/evidence/verify-$id.json" 2> "$RUNNER_TEMP/evidence/verify-$id.err"; then
+              echo "$id VERIFY_OK" >> "$RUNNER_TEMP/evidence/results.txt"
+            else
+              echo "$id VERIFY_FAILED" >> "$RUNNER_TEMP/evidence/results.txt"
+            fi
+            cp "$d/receipt.json" "$RUNNER_TEMP/evidence/receipt-$id.json"
+            cp "$d/build.log" "$RUNNER_TEMP/evidence/build-$id.log"
+            if [ -f "$d/targets.tar.gz" ]; then cp "$d/targets.tar.gz" "$RUNNER_TEMP/evidence/targets-$id.tar.gz"; fi
+          done
+          cat "$RUNNER_TEMP/evidence/results.txt"
+      - name: Collect hashes
+        run: |
+          cd "$RUNNER_TEMP/evidence"
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-batch-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+      - name: Publish evidence release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="replay-batch-${{ github.run_id }}"
+          gh release create "$TAG" "$RUNNER_TEMP"/evidence/* \
+            --repo "${{ github.repository }}" \
+            --title "Replay batch ${{ inputs.targets }} (run ${{ github.run_id }})" \
+            --notes "Volunteer build evidence from pinned tracker commit 4a8c4c8851b40294e9c21c28ace2771c569094b1."
+          echo "Release: https://github.com/${{ github.repository }}/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
